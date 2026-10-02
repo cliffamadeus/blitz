@@ -27,6 +27,36 @@ if ($section === 'users') {
     $users = $stmt->fetchAll();
 }
 
+// Fetch pending password reset requests
+if ($section === 'reset_requests') {
+
+    $stmt = $pdo->query("
+        SELECT
+            password_reset_requests.reset_request_id,
+            password_reset_requests.user_id,
+            password_reset_requests.reset_request_status,
+            password_reset_requests.reset_request_created_at,
+            password_reset_requests.reset_request_resolved_at,
+
+            users.user_email,
+            users.user_username
+
+        FROM password_reset_requests
+
+        INNER JOIN users
+            ON password_reset_requests.user_id = users.user_id
+
+        ORDER BY
+            CASE password_reset_requests.reset_request_status
+                WHEN 'pending' THEN 0
+                ELSE 1
+            END,
+            password_reset_requests.reset_request_id DESC
+    ");
+
+    $resetRequests = $stmt->fetchAll();
+}
+
 // Create User
 if ($section === 'users' && $action === 'create') {
 
@@ -349,6 +379,7 @@ if ($section === 'users' && $action === 'reset_password') {
 
             $hashedPassword = password_hash($newPassword, PASSWORD_DEFAULT);
 
+            // 1. Update the user's password
             $stmt = $pdo->prepare("
                 UPDATE users
                 SET user_password = ?
@@ -357,6 +388,23 @@ if ($section === 'users' && $action === 'reset_password') {
 
             $stmt->execute([$hashedPassword, $userId]);
 
+            // 2. Mark any pending reset request for this user as done
+            $stmt = $pdo->prepare("
+                UPDATE password_reset_requests
+                SET
+                    reset_request_status = 'done',
+                    reset_request_resolved_at = CURRENT_TIMESTAMP,
+                    reset_request_resolved_by = ?
+                WHERE user_id = ?
+                    AND reset_request_status = 'pending'
+            ");
+
+            $stmt->execute([
+                $_SESSION['user_id'] ?? null,
+                $userId
+            ]);
+
+            // 3. Audit trail
             if (isset($_SESSION['user_id'])) {
                 logActivity(
                     $pdo,
@@ -374,6 +422,43 @@ if ($section === 'users' && $action === 'reset_password') {
         }
     }
 }
+
+// Dismiss a reset request (mark done without resetting password)
+if ($section === 'reset_requests' && $action === 'dismiss') {
+
+    $requestId = (int) ($_GET['id'] ?? 0);
+
+    $stmt = $pdo->prepare("
+        UPDATE password_reset_requests
+        SET
+            reset_request_status = 'done',
+            reset_request_resolved_at = CURRENT_TIMESTAMP,
+            reset_request_resolved_by = ?
+        WHERE reset_request_id = ?
+            AND reset_request_status = 'pending'
+    ");
+
+    $stmt->execute([
+        $_SESSION['user_id'] ?? null,
+        $requestId
+    ]);
+
+    if (isset($_SESSION['user_id'])) {
+        logActivity(
+            $pdo,
+            $_SESSION['user_id'],
+            $_SESSION['user_email'] ?? null,
+            'dismiss-password-reset',
+            'success'
+        );
+    }
+
+    $_SESSION['alert'] = 'Reset request dismissed.';
+
+    header("Location: users.php?section=reset_requests");
+    exit;
+}
+
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -391,7 +476,11 @@ if ($section === 'users' && $action === 'reset_password') {
     <h1>User Management</h1>
 
     <nav>
+        <a href="index.php">Dashboard</a>
+        |
         <a href="users.php?section=users">Users</a>
+        |
+        <a href="users.php?section=reset_requests">Password Reset Requests</a>
     </nav>
 
     <hr>
@@ -503,32 +592,32 @@ if ($section === 'users' && $action === 'reset_password') {
 
         <?php elseif ($action === 'reset_password'): ?>
 
-        <h2>Reset Password</h2>
-
-        <p>
-            Resetting password for
-            <strong><?= htmlspecialchars($user['user_email']) ?></strong>
-        </p>
-
-        <form method="POST">
-            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(generateCsrfToken()) ?>">
+            <h2>Reset Password</h2>
 
             <p>
-                <label>New Password</label>
-                <br>
-                <input type="password" name="new_password" minlength="8" required>
+                Resetting password for
+                <strong><?= htmlspecialchars($user['user_email']) ?></strong>
             </p>
 
-            <p>
-                <label>Confirm New Password</label>
-                <br>
-                <input type="password" name="confirm_password" minlength="8" required>
-            </p>
+            <form method="POST">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(generateCsrfToken()) ?>">
 
-            <button type="submit">Reset Password</button>
+                <p>
+                    <label>New Password</label>
+                    <br>
+                    <input type="password" name="new_password" minlength="8" required>
+                </p>
 
-            <a href="users.php?section=users">Cancel</a>
-        </form>
+                <p>
+                    <label>Confirm New Password</label>
+                    <br>
+                    <input type="password" name="confirm_password" minlength="8" required>
+                </p>
+
+                <button type="submit">Reset Password</button>
+
+                <a href="users.php?section=users">Cancel</a>
+            </form>
 
         <?php else: ?>
 
@@ -572,6 +661,8 @@ if ($section === 'users' && $action === 'reset_password') {
                             <td>
                                 <a href="users.php?section=users&action=update&id=<?= $user['user_id'] ?>">Edit</a>
                                 |
+                                <a href="users.php?section=users&action=reset_password&id=<?= $user['user_id'] ?>">Reset Password</a>
+                                |
                                 <?php if ($user['user_verified']): ?>
                                     <a
                                         href="users.php?section=users&action=unverify&id=<?= $user['user_id'] ?>"
@@ -588,8 +679,6 @@ if ($section === 'users' && $action === 'reset_password') {
                                     </a>
                                 <?php endif; ?>
                                 |
-                                <a href="users.php?section=users&action=reset_password&id=<?= $user['user_id'] ?>">Reset Password</a>
-                                |
                                 <a
                                     href="users.php?section=users&action=delete&id=<?= $user['user_id'] ?>"
                                     onclick="return confirm('Delete this user?');"
@@ -603,7 +692,88 @@ if ($section === 'users' && $action === 'reset_password') {
             </table>
 
         <?php endif; ?>
-    
+
+    <?php endif; ?>
+
+    <!--RESET REQUESTS SECTION-->
+    <?php if ($section === 'reset_requests'): ?>
+
+        <h1>Password Reset Requests</h1>
+
+        <?php if (empty($resetRequests)): ?>
+
+            <p>No password reset requests.</p>
+
+        <?php else: ?>
+
+            <table border="1" cellpadding="8">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Username</th>
+                        <th>Email</th>
+                        <th>Status</th>
+                        <th>Requested At</th>
+                        <th>Resolved At</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($resetRequests as $request): ?>
+                        <tr>
+                            <td>
+                                <?= htmlspecialchars($request['reset_request_id']) ?>
+                            </td>
+                            <td>
+                                <?= htmlspecialchars($request['user_username'] ?? '-') ?>
+                            </td>
+                            <td>
+                                <?= htmlspecialchars($request['user_email'] ?? '-') ?>
+                            </td>
+                            <td>
+                                <?php if ($request['reset_request_status'] === 'pending'): ?>
+                                    <strong style="color: orange;">Pending</strong>
+                                <?php else: ?>
+                                    <strong style="color: green;">Done</strong>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?= htmlspecialchars($request['reset_request_created_at']) ?>
+                            </td>
+                            <td>
+                                <?= $request['reset_request_resolved_at']
+                                    ? htmlspecialchars($request['reset_request_resolved_at'])
+                                    : '—' ?>
+                            </td>
+                            <td>
+                                <?php if ($request['reset_request_status'] === 'pending'): ?>
+
+                                    <a href="users.php?section=users&action=reset_password&id=<?= (int) $request['user_id'] ?>">
+                                        Reset Password
+                                    </a>
+
+                                    |
+
+                                    <a
+                                        href="users.php?section=reset_requests&action=dismiss&id=<?= (int) $request['reset_request_id'] ?>"
+                                        onclick="return confirm('Dismiss this reset request without changing the password?');"
+                                    >
+                                        Dismiss
+                                    </a>
+
+                                <?php else: ?>
+
+                                    <em>—</em>
+
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+
+        <?php endif; ?>
+
     <?php endif; ?>
 
 </body>
