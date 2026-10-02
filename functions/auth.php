@@ -1,4 +1,4 @@
-<?php 
+<?php
 
 // ------------------------------------------------------
 // Login
@@ -51,14 +51,22 @@ function loginUser($pdo, $login, $password)
     // Create database session record
     $_SESSION['session_id'] = startUserSession($pdo);
 
+    // Log complete login attempt
+    logActivity(
+        $pdo,$_SESSION['user_id'],
+        $_SESSION['user_email'],
+        $_SESSION['user_role'] . '-login',
+        'success'
+    );
+
     return true;
 }
+
 
 // ------------------------------------------------------
 // Authentication
 // ------------------------------------------------------
 
-// Require Login
 function requireLogin()
 {
     if (!isset($_SESSION['user_id'])) {
@@ -70,7 +78,6 @@ function requireLogin()
 }
 
 
-// Require Specific Role
 function requireRole($role)
 {
     requireLogin();
@@ -78,6 +85,38 @@ function requireRole($role)
     if ($_SESSION['user_role'] !== $role) {
         http_response_code(403);
         die('Access denied.');
+    }
+}
+
+
+// ------------------------------------------------------
+// Logout
+// ------------------------------------------------------
+
+function logoutUser($pdo)
+{
+    // Log logout activity
+    if (isset($_SESSION['user_id'])) {
+
+        logActivity(
+            $pdo,
+            $_SESSION['user_id'],
+            $_SESSION['user_email'] ?? null,
+            $_SESSION['user_role'] . '-logout',
+            'success'
+        );
+
+    }
+
+    // End database session
+    endUserSession($pdo);
+
+    // Clear PHP session data
+    $_SESSION = [];
+
+    // Destroy PHP session
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        session_destroy();
     }
 }
 ?>

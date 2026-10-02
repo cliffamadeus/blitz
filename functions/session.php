@@ -117,6 +117,18 @@ function checkSessionTimeout()
 
         if ($inactive >= $timeout) {
 
+            // Log logout activity
+            if (isset($_SESSION['user_id'])) {
+
+                logActivity(
+                    $pdo,
+                    $_SESSION['user_id'],
+                    $_SESSION['user_email'] ?? null,
+                    'logout-session-timeout',
+                    'success'
+                );
+            }
+
             // End database session
             endUserSession($pdo);
 
