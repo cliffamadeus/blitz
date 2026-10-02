@@ -7,10 +7,10 @@ require_once(__DIR__ . '/../functions/redirect.php');
 require_once(__DIR__ . '/../functions/session.php');
 require_once(__DIR__ . '/../functions/csrf.php');
 
-define('BASE_URL','http://localhost/it34-boilerplate');
+define('BASE_URL','http://localhost/blitz');
 
 define('DB_HOST','localhost');
-define('DB_NAME','it34_lab_db');
+define('DB_NAME','blitz_db');
 define('DB_USER','root');
 define('DB_PASS','');
 

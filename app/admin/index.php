@@ -4,16 +4,6 @@ require '../../config/config.php';
 
 requireRole('admin');
 
-/*
-logActivity(
-    $pdo,
-    $_SESSION['user_id'],
-    $_SESSION['user_email'],
-    'view_activity_logs',
-    'success'
-);
-*/
-
 // Determine current section
 $section = $_GET['section'] ?? 'activity-logs';
 
