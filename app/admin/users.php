@@ -306,6 +306,74 @@ if ($section === 'users' && $action === 'delete') {
     exit;
 }
 
+
+// Reset User Password
+if ($section === 'users' && $action === 'reset_password') {
+
+    $userId = (int) ($_GET['id'] ?? 0);
+
+    // Retrieve user
+    $stmt = $pdo->prepare("
+        SELECT user_id, user_email
+        FROM users
+        WHERE user_id = ?
+    ");
+
+    $stmt->execute([$userId]);
+
+    $user = $stmt->fetch();
+
+    if (!$user) {
+        die("User not found.");
+    }
+
+    // Handle form submission
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
+        $newPassword     = $_POST['new_password'] ?? '';
+        $confirmPassword = $_POST['confirm_password'] ?? '';
+
+        if ($newPassword === '' || $confirmPassword === '') {
+
+            $_SESSION['alert'] = 'Please fill in both password fields.';
+
+        } elseif ($newPassword !== $confirmPassword) {
+
+            $_SESSION['alert'] = 'Passwords do not match.';
+
+        } elseif (strlen($newPassword) < 8) {
+
+            $_SESSION['alert'] = 'Password must be at least 8 characters.';
+
+        } else {
+
+            $hashedPassword = password_hash($newPassword, PASSWORD_DEFAULT);
+
+            $stmt = $pdo->prepare("
+                UPDATE users
+                SET user_password = ?
+                WHERE user_id = ?
+            ");
+
+            $stmt->execute([$hashedPassword, $userId]);
+
+            if (isset($_SESSION['user_id'])) {
+                logActivity(
+                    $pdo,
+                    $_SESSION['user_id'],
+                    $_SESSION['user_email'] ?? null,
+                    'reset-user-password',
+                    'success'
+                );
+            }
+
+            $_SESSION['alert'] = 'User password reset successfully.';
+
+            header("Location: users.php?section=users");
+            exit;
+        }
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -433,6 +501,35 @@ if ($section === 'users' && $action === 'delete') {
                 <a href="users.php?section=users">Cancel</a>
             </form>
 
+        <?php elseif ($action === 'reset_password'): ?>
+
+        <h2>Reset Password</h2>
+
+        <p>
+            Resetting password for
+            <strong><?= htmlspecialchars($user['user_email']) ?></strong>
+        </p>
+
+        <form method="POST">
+            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(generateCsrfToken()) ?>">
+
+            <p>
+                <label>New Password</label>
+                <br>
+                <input type="password" name="new_password" minlength="8" required>
+            </p>
+
+            <p>
+                <label>Confirm New Password</label>
+                <br>
+                <input type="password" name="confirm_password" minlength="8" required>
+            </p>
+
+            <button type="submit">Reset Password</button>
+
+            <a href="users.php?section=users">Cancel</a>
+        </form>
+
         <?php else: ?>
 
             <table border="1" cellpadding="8">
@@ -491,6 +588,8 @@ if ($section === 'users' && $action === 'delete') {
                                     </a>
                                 <?php endif; ?>
                                 |
+                                <a href="users.php?section=users&action=reset_password&id=<?= $user['user_id'] ?>">Reset Password</a>
+                                |
                                 <a
                                     href="users.php?section=users&action=delete&id=<?= $user['user_id'] ?>"
                                     onclick="return confirm('Delete this user?');"
@@ -504,7 +603,7 @@ if ($section === 'users' && $action === 'delete') {
             </table>
 
         <?php endif; ?>
-
+    
     <?php endif; ?>
 
 </body>
