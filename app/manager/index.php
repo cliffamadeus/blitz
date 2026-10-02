@@ -4,6 +4,8 @@ require '../../config/config.php';
 
 requireRole('manager');
 
+requireCsrfToken();
+
 // Determin current section
 $section = $_GET['section'] ?? 'students';
 
