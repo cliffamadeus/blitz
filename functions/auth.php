@@ -51,6 +51,14 @@ function loginUser($pdo, $login, $password)
     // Create database session record
     $_SESSION['session_id'] = startUserSession($pdo);
 
+    // Log complete login attempt
+    logActivity(
+        $pdo,$_SESSION['user_id'],
+        $_SESSION['user_email'],
+        $_SESSION['user_role'] . '-login',
+        'success'
+    );
+
     return true;
 }
 
@@ -94,9 +102,10 @@ function logoutUser($pdo)
             $pdo,
             $_SESSION['user_id'],
             $_SESSION['user_email'] ?? null,
-            'logout',
+            $_SESSION['user_role'] . '-logout',
             'success'
         );
+
     }
 
     // End database session

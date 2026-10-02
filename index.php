@@ -33,14 +33,7 @@ if($_SERVER['REQUEST_METHOD'] === 'POST'){
         $result = loginUser($pdo,$login,$password);
 
         if($result===true){
-            // Log complete login attempt
-            logActivity(
-                $pdo,$_SESSION['user_id'],
-                $_SESSION['user_email'],
-                'login',
-                'success'
-            );
-
+        
             header('Location: ' . BASE_URL . '/app/' . $_SESSION['user_role'] . '/index.php');
             exit;
 
