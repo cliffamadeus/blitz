@@ -58,3 +58,10 @@ VALUES
     '$2y$10$HNfhClczEWBxcFuJwP53iu2Y75Tba7IEtmX8vX.1tp0dZ5EVt9CbO',
     'user'
 );
+
+-- User verification
+ALTER TABLE users
+ADD COLUMN user_verified TINYINT(1) NOT NULL DEFAULT 0 AFTER user_role;
+
+-- Mark existing users as verified so they aren't locked out
+UPDATE users SET user_verified = 1;

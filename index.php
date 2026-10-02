@@ -30,16 +30,20 @@ if($_SERVER['REQUEST_METHOD'] === 'POST'){
 
     } else {
 
-        $result = loginUser($pdo,$login,$password);
+        $result = loginUser($pdo, $login, $password);
 
-        if($result===true){
-        
+        if ($result === true) {
+
             header('Location: ' . BASE_URL . '/app/' . $_SESSION['user_role'] . '/index.php');
             exit;
 
-        } elseif ($result === 'active_session'){
+        } elseif ($result === 'active_session') {
 
             $error = 'This account is already logged in on another device';
+
+        } elseif ($result === 'unverified') {
+
+            $error = 'Your account is pending admin verification. Please contact an administrator.';
 
         } else {
 

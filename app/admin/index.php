@@ -69,6 +69,7 @@ if ($section === 'activity-logs') {
     <nav>
         <a href="index.php?section=activity-logs">Activity Logs |</a>
         <a href="index.php?section=user-sessions">User Sessions |</a>
+        <a href="users.php">User Management |</a>
     </nav>
 
     <?php if ($section === 'activity-logs'): ?>

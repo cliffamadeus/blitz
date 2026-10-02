@@ -12,7 +12,8 @@ function loginUser($pdo, $login, $password)
             user_email,
             user_username,
             user_password,
-            user_role
+            user_role,
+            user_verified
         FROM users
         WHERE user_email = :login
         OR user_username = :login
@@ -35,6 +36,11 @@ function loginUser($pdo, $login, $password)
     // Invalid password
     if (!password_verify($password, $user['user_password'])) {
         return false;
+    }
+
+    // Account not verified by admin
+    if (!$user['user_verified']) {
+        return 'unverified';
     }
 
     // Check if user already has an active session
@@ -61,7 +67,6 @@ function loginUser($pdo, $login, $password)
 
     return true;
 }
-
 
 // ------------------------------------------------------
 // Authentication
