@@ -255,36 +255,40 @@ if ($section === 'books' && $action === 'update') {
 }
 
 // Fetch Borrow Records
-if($section === 'borrow'){
+if ($section === 'borrow') {
 
-    // Fetch Students for borrow form
-    $stmt=$pdo->query("
+    // Fetch students for borrow form
+    $stmt = $pdo->query("
         SELECT
             student_id,
             student_first_name,
             student_last_name
         FROM students
-        ORDER BY student_last_name,student_first_name
+        ORDER BY student_last_name, student_first_name
     ");
 
-    $students  =  $stmt->fetchAll();
-    // Fetch Books for borrow form
+    $students = $stmt->fetchAll();
 
-    $stmt=$pdo->query("
+
+    // Fetch books for borrow form
+    $stmt = $pdo->query("
         SELECT
             book_id,
             book_title,
             book_author
         FROM books
-        ORDER By book_title
+        ORDER BY book_title
     ");
 
     $books = $stmt->fetchAll();
 
+
+    // Fetch borrow records
     $stmt = $pdo->query("
         SELECT
             borrow_transactions.borrow_id,
             borrow_transactions.borrow_date,
+            borrow_transactions.borrow_due_date,
             borrow_transactions.borrow_return_date,
 
             students.student_first_name,
@@ -293,63 +297,88 @@ if($section === 'borrow'){
             books.book_title,
             books.book_author
 
-        FROM  borrow_transactions
+        FROM borrow_transactions
 
         INNER JOIN students
-            ON  borrow_transactions.student_id = students.student_id
+            ON borrow_transactions.student_id = students.student_id
 
         INNER JOIN books
-            ON  borrow_transactions.book_id = books.book_id
+            ON borrow_transactions.book_id = books.book_id
 
-        ORDER BY  borrow_transactions.borrow_id DESC
+        ORDER BY borrow_transactions.borrow_id DESC
     ");
 
     $borrowRecords = $stmt->fetchAll();
-
 }
 
 // Borrow a book
-if($section==='borrow' && $action==="create"){
+if ($section === 'borrow' && $action === 'create') {
 
-    if($_SERVER['REQUEST_METHOD'] === 'POST'){
-        
-        $studentId = (int)($_POST['student_id'] ?? 0);
-        $bookId = (int)($_POST['book_id'] ?? 0);
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
-        if($studentId > 0  && $bookId >0){
+        $studentId = (int) ($_POST['student_id'] ?? 0);
+        $bookId = (int) ($_POST['book_id'] ?? 0);
+        $dueDate = $_POST['borrow_due_date'] ?? '';
+
+        if ($studentId > 0 && $bookId > 0 && $dueDate !== '') {
 
             // Check if student has an unreturned book
             $stmt = $pdo->prepare("
                 SELECT borrow_id
                 FROM borrow_transactions
-                WHERE  student_id=?
-                    AND borrow_return_date is NULL
+                WHERE student_id = ?
+                    AND borrow_return_date IS NULL
                 LIMIT 1
             ");
 
             $stmt->execute([$studentId]);
+
             $studentBorrow = $stmt->fetch();
 
-            if($studentBorrow){
-                $_SESSION['alert'] = 'This student cannot borrow another book because a previous book has not been returned';
+            if ($studentBorrow) {
+
+                $_SESSION['alert'] =
+                    'This student cannot borrow another book because a previous book has not been returned.';
+
             } else {
 
-                // Check if book is already returned
+                // Check if book is currently borrowed
                 $stmt = $pdo->prepare("
                     SELECT borrow_id
                     FROM borrow_transactions
-                    WHERE book_id=?
-                        AND borrow_return_date is NULL
+                    WHERE book_id = ?
+                        AND borrow_return_date IS NULL
                     LIMIT 1
                 ");
 
                 $stmt->execute([$bookId]);
+
                 $bookBorrow = $stmt->fetch();
 
-                if($bookBorrow){
-                    $_SESSION['alert'] = 'This book cannot be borrowed because it has not been returned';
-                }else{
-                    
+                if ($bookBorrow) {
+
+                    $_SESSION['alert'] =
+                        'This book cannot be borrowed because it has not been returned.';
+
+                } else {
+
+                    // Create borrow transaction
+                    $stmt = $pdo->prepare("
+                        INSERT INTO borrow_transactions (
+                            student_id,
+                            book_id,
+                            borrow_due_date
+                        )
+                        VALUES (?, ?, ?)
+                    ");
+
+                    $stmt->execute([
+                        $studentId,
+                        $bookId,
+                        $dueDate
+                    ]);
+
+                    // Log activity
                     if (isset($_SESSION['user_id'])) {
 
                         logActivity(
@@ -361,21 +390,8 @@ if($section==='borrow' && $action==="create"){
                         );
                     }
 
-                    // Create borrow record finally hehehehe
-                    $stmt = $pdo->prepare("
-                        INSERT INTO borrow_transactions(
-                            student_id,
-                            book_id
-                        )
-                        VALUES(?,?)
-                    ");
-
-                    $stmt->execute([
-                        $studentId,
-                        $bookId
-                    ]);
-
-                    $_SESSION['alert'] = 'Book borrowed successfully';
+                    $_SESSION['alert'] =
+                        'Book borrowed successfully.';
                 }
             }
 
@@ -383,8 +399,8 @@ if($section==='borrow' && $action==="create"){
             exit;
         }
 
+        $_SESSION['alert'] = 'Please select a student, book, and due date.';
     }
-
 }
 
 // BORROW RETURN
@@ -773,7 +789,17 @@ if ($section === 'borrow' && $action === 'delete') {
 
                     </select>
                 </p>
+                <p>
+                    <label>Due Date:</label>
+                    <br>
 
+                    <input
+                        type="date"
+                        name="borrow_due_date"
+                        min="<?= date('Y-m-d') ?>"
+                        required
+                    >
+                </p>
                 <button type="submit">
                     Borrow
                 </button>
@@ -792,6 +818,7 @@ if ($section === 'borrow' && $action === 'delete') {
                         <th>Student</th>
                         <th>Book</th>
                         <th>Borrow Date</th>
+                        <th>Due Date</th>
                         <th>Return Date</th>
                         <th>Status</th>
                         <th>Actions</th>
@@ -835,6 +862,26 @@ if ($section === 'borrow' && $action === 'delete') {
 
                             <td>
                                 <?= htmlspecialchars($borrow['borrow_date']) ?>
+                            </td>
+
+                            <td>
+                                <?php
+                                $today = new DateTime();
+                                $dueDate = new DateTime($borrow['borrow_due_date']);
+
+                                if (
+                                    empty($borrow['borrow_return_date']) &&
+                                    $dueDate < $today
+                                ) {
+                                    $daysOverdue = $today->diff($dueDate)->days;
+
+                                    echo '<strong style="color: red;">Overdue by '
+                                        . $daysOverdue
+                                        . ' day(s)</strong>';
+                                } else {
+                                    echo htmlspecialchars($borrow['borrow_due_date']);
+                                }
+                                ?>
                             </td>
 
                             <td>

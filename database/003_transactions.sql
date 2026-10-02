@@ -18,6 +18,16 @@ CREATE TABLE IF NOT EXISTS students (
 DEFAULT CHARSET=utf8mb4
 COLLATE=utf8mb4_general_ci;
 
+-- Insert statement #1: Insert Students
+INSERT INTO students (
+    student_first_name,
+    student_last_name,
+    student_course
+) VALUES
+('CLIFF AMADEUS', 'EVANGELIO', 'BSIT'),
+('JAN XAVIER', 'EVANGELIO', 'BSA-AGRONOMY'),
+('RON EDMUND', 'EVANGELIO', 'BSEE'),
+('RK', 'FERNANDEZ', 'BSIT');
 
 -- #2 books table
 CREATE TABLE IF NOT EXISTS books (
@@ -37,6 +47,15 @@ CREATE TABLE IF NOT EXISTS books (
 DEFAULT CHARSET=utf8mb4
 COLLATE=utf8mb4_general_ci;
 
+-- Insert statement #2: Insert Books
+INSERT INTO books (
+    book_title,
+    book_author,
+    book_category
+) VALUES
+('Project Hail Mary', 'Andy Weir', 'Science Fiction'),
+('Jurassic Park', 'Michael Crichton', 'Science Fiction'),
+('1984', 'George Orwell', 'Science Fiction');
 
 -- #3 borrow transactions table
 CREATE TABLE IF NOT EXISTS borrow_transactions (
@@ -73,34 +92,18 @@ DEFAULT CHARSET=utf8mb4
 COLLATE=utf8mb4_general_ci;
 
 
--- Insert statement #1: Insert Students
-INSERT INTO students (
-    student_first_name,
-    student_last_name,
-    student_course
-) VALUES
-('CLIFF AMADEUS', 'EVANGELIO', 'BSIT'),
-('JAN XAVIER', 'EVANGELIO', 'BSA-AGRONOMY'),
-('RON EDMUND', 'EVANGELIO', 'BSEE'),
-('RK', 'FERNANDEZ', 'BSIT');
+-- Borrow Due Date
+ALTER TABLE borrow_transactions
+ADD COLUMN borrow_due_date DATE NULL
+AFTER borrow_date;
 
-
--- Insert statement #2: Insert Books
-INSERT INTO books (
-    book_title,
-    book_author,
-    book_category
-) VALUES
-('Project Hail Mary', 'Andy Weir', 'Science Fiction'),
-('Jurassic Park', 'Michael Crichton', 'Science Fiction'),
-('1984', 'George Orwell', 'Science Fiction');
-
-
--- Insert statement #3: Insert Borrow Transactions
+-- Sample Due Date 
 INSERT INTO borrow_transactions (
     student_id,
-    book_id
+    book_id,
+    borrow_date,
+    borrow_due_date
 ) VALUES
-(1, 2),
-(2, 1),
-(3, 3);
+(1, 1, '2026-09-15', '2026-09-20'),
+(2, 2, '2026-09-16', '2026-09-20'),
+(3, 3, '2026-09-17', '2026-09-20');
