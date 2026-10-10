@@ -27,6 +27,36 @@ if ($section === 'users') {
     $users = $stmt->fetchAll();
 }
 
+// Fetch pending password reset requests
+if ($section === 'reset_requests') {
+
+    $stmt = $pdo->query("
+        SELECT
+            password_reset_requests.reset_request_id,
+            password_reset_requests.user_id,
+            password_reset_requests.reset_request_status,
+            password_reset_requests.reset_request_created_at,
+            password_reset_requests.reset_request_resolved_at,
+
+            users.user_email,
+            users.user_username
+
+        FROM password_reset_requests
+
+        INNER JOIN users
+            ON password_reset_requests.user_id = users.user_id
+
+        ORDER BY
+            CASE password_reset_requests.reset_request_status
+                WHEN 'pending' THEN 0
+                ELSE 1
+            END,
+            password_reset_requests.reset_request_id DESC
+    ");
+
+    $resetRequests = $stmt->fetchAll();
+}
+
 // Create User
 if ($section === 'users' && $action === 'create') {
 
@@ -283,26 +313,276 @@ if ($section === 'users' && $action === 'delete') {
         exit;
     }
 
+    // Retrieve the target user to show in confirmation
     $stmt = $pdo->prepare("
-        DELETE FROM users
+        SELECT user_id, user_email, user_username, user_role
+        FROM users
         WHERE user_id = ?
     ");
 
     $stmt->execute([$userId]);
+
+    $userToDelete = $stmt->fetch();
+
+    if (!$userToDelete) {
+
+        $_SESSION['alert'] = 'User not found.';
+
+        header("Location: users.php?section=users");
+        exit;
+    }
+
+    // ------------------------------------------------------------
+    // CONSTRAINT: Cannot delete the last user of a given role
+    // ------------------------------------------------------------
+    $roleCounts = [
+        'admin'   => 0,
+        'manager' => 0,
+        'user'    => 0,
+    ];
+
+    $stmt = $pdo->query("
+        SELECT user_role, COUNT(*) AS total
+        FROM users
+        GROUP BY user_role
+    ");
+
+    foreach ($stmt->fetchAll() as $row) {
+        if (isset($roleCounts[$row['user_role']])) {
+            $roleCounts[$row['user_role']] = (int) $row['total'];
+        }
+    }
+
+    $targetRole = $userToDelete['user_role'];
+
+    if (isset($roleCounts[$targetRole]) && $roleCounts[$targetRole] <= 1) {
+
+        $_SESSION['alert'] =
+            'Cannot delete this user: they are the only remaining "' .
+            $targetRole .
+            '" in the system.';
+
+        header("Location: users.php?section=users");
+        exit;
+    }
+
+    // Handle password confirmation submission
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
+        $adminPassword = $_POST['admin_password'] ?? '';
+
+        if ($adminPassword === '') {
+
+            $_SESSION['alert'] = 'Please enter your password to confirm deletion.';
+
+        } else {
+
+            // Fetch the currently logged-in admin's details
+            $stmt = $pdo->prepare("
+                SELECT user_id, user_email, user_password, user_role
+                FROM users
+                WHERE user_id = ?
+                LIMIT 1
+            ");
+
+            $stmt->execute([$_SESSION['user_id'] ?? 0]);
+
+            $admin = $stmt->fetch();
+
+            // Verify the admin exists and has admin role
+            if (!$admin || $admin['user_role'] !== 'admin') {
+
+                $_SESSION['alert'] = 'Only administrators can delete users.';
+
+                header("Location: users.php?section=users");
+                exit;
+            }
+
+            // Verify the supplied password against the stored hash
+            if (!password_verify($adminPassword, $admin['user_password'])) {
+
+                // Log failed attempt
+                logActivity(
+                    $pdo,
+                    $_SESSION['user_id'],
+                    $_SESSION['user_email'] ?? null,
+                    'delete-user-failed-password',
+                    'failure'
+                );
+
+                $_SESSION['alert'] = 'Incorrect password. User was not deleted.';
+
+            } else {
+
+                // Re-check the constraint here too, in case the DB changed
+                // between page load and form submission.
+                $stmt = $pdo->prepare("
+                    SELECT COUNT(*) AS total
+                    FROM users
+                    WHERE user_role = ?
+                ");
+
+                $stmt->execute([$targetRole]);
+
+                $freshCount = (int) $stmt->fetchColumn();
+
+                if ($freshCount <= 1) {
+
+                    $_SESSION['alert'] =
+                        'Cannot delete this user: they are the only remaining "' .
+                        $targetRole .
+                        '" in the system.';
+
+                    header("Location: users.php?section=users");
+                    exit;
+                }
+
+                // Constraint passed — proceed with deletion
+                $stmt = $pdo->prepare("
+                    DELETE FROM users
+                    WHERE user_id = ?
+                ");
+
+                $stmt->execute([$userId]);
+
+                // Audit trail
+                logActivity(
+                    $pdo,
+                    $_SESSION['user_id'],
+                    $_SESSION['user_email'] ?? null,
+                    'delete-user',
+                    'success'
+                );
+
+                $_SESSION['alert'] = 'User deleted successfully.';
+
+                header("Location: users.php?section=users");
+                exit;
+            }
+        }
+    }
+}
+
+
+// Reset User Password
+if ($section === 'users' && $action === 'reset_password') {
+
+    $userId = (int) ($_GET['id'] ?? 0);
+
+    // Retrieve user
+    $stmt = $pdo->prepare("
+        SELECT user_id, user_email
+        FROM users
+        WHERE user_id = ?
+    ");
+
+    $stmt->execute([$userId]);
+
+    $user = $stmt->fetch();
+
+    if (!$user) {
+        die("User not found.");
+    }
+
+    // Handle form submission
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
+        $newPassword     = $_POST['new_password'] ?? '';
+        $confirmPassword = $_POST['confirm_password'] ?? '';
+
+        if ($newPassword === '' || $confirmPassword === '') {
+
+            $_SESSION['alert'] = 'Please fill in both password fields.';
+
+        } elseif ($newPassword !== $confirmPassword) {
+
+            $_SESSION['alert'] = 'Passwords do not match.';
+
+        } elseif (strlen($newPassword) < 8) {
+
+            $_SESSION['alert'] = 'Password must be at least 8 characters.';
+
+        } else {
+
+            $hashedPassword = password_hash($newPassword, PASSWORD_DEFAULT);
+
+            // 1. Update the user's password
+            $stmt = $pdo->prepare("
+                UPDATE users
+                SET user_password = ?
+                WHERE user_id = ?
+            ");
+
+            $stmt->execute([$hashedPassword, $userId]);
+
+            // 2. Mark any pending reset request for this user as done
+            $stmt = $pdo->prepare("
+                UPDATE password_reset_requests
+                SET
+                    reset_request_status = 'done',
+                    reset_request_resolved_at = CURRENT_TIMESTAMP,
+                    reset_request_resolved_by = ?
+                WHERE user_id = ?
+                    AND reset_request_status = 'pending'
+            ");
+
+            $stmt->execute([
+                $_SESSION['user_id'] ?? null,
+                $userId
+            ]);
+
+            // 3. Audit trail
+            if (isset($_SESSION['user_id'])) {
+                logActivity(
+                    $pdo,
+                    $_SESSION['user_id'],
+                    $_SESSION['user_email'] ?? null,
+                    'reset-user-password',
+                    'success'
+                );
+            }
+
+            $_SESSION['alert'] = 'User password reset successfully.';
+
+            header("Location: users.php?section=users");
+            exit;
+        }
+    }
+}
+
+// Dismiss a reset request (mark done without resetting password)
+if ($section === 'reset_requests' && $action === 'dismiss') {
+
+    $requestId = (int) ($_GET['id'] ?? 0);
+
+    $stmt = $pdo->prepare("
+        UPDATE password_reset_requests
+        SET
+            reset_request_status = 'done',
+            reset_request_resolved_at = CURRENT_TIMESTAMP,
+            reset_request_resolved_by = ?
+        WHERE reset_request_id = ?
+            AND reset_request_status = 'pending'
+    ");
+
+    $stmt->execute([
+        $_SESSION['user_id'] ?? null,
+        $requestId
+    ]);
 
     if (isset($_SESSION['user_id'])) {
         logActivity(
             $pdo,
             $_SESSION['user_id'],
             $_SESSION['user_email'] ?? null,
-            'delete-user',
+            'dismiss-password-reset',
             'success'
         );
     }
 
-    $_SESSION['alert'] = 'User deleted successfully.';
+    $_SESSION['alert'] = 'Reset request dismissed.';
 
-    header("Location: users.php?section=users");
+    header("Location: users.php?section=reset_requests");
     exit;
 }
 
@@ -323,7 +603,11 @@ if ($section === 'users' && $action === 'delete') {
     <h1>User Management</h1>
 
     <nav>
+        <a href="index.php">Dashboard</a>
+        |
         <a href="users.php?section=users">Users</a>
+        |
+        <a href="users.php?section=reset_requests">Password Reset Requests</a>
     </nav>
 
     <hr>
@@ -432,6 +716,81 @@ if ($section === 'users' && $action === 'delete') {
 
                 <a href="users.php?section=users">Cancel</a>
             </form>
+        <?php elseif ($action === 'delete'): ?>
+
+            <h2>Confirm User Deletion</h2>
+
+            <p>
+                You are about to permanently delete the following user:
+            </p>
+
+            <table border="1" cellpadding="8">
+                <tr>
+                    <th>ID</th>
+                    <td><?= htmlspecialchars($userToDelete['user_id']) ?></td>
+                </tr>
+                <tr>
+                    <th>Email</th>
+                    <td><?= htmlspecialchars($userToDelete['user_email']) ?></td>
+                </tr>
+                <tr>
+                    <th>Username</th>
+                    <td><?= htmlspecialchars($userToDelete['user_username']) ?></td>
+                </tr>
+                <tr>
+                    <th>Role</th>
+                    <td><?= htmlspecialchars($userToDelete['user_role']) ?></td>
+                </tr>
+            </table>
+
+            <p style="color: red;">
+                <strong>Warning:</strong> This action cannot be undone.
+            </p>
+
+            <form method="POST">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(generateCsrfToken()) ?>">
+
+                <p>
+                    <label>Enter your admin password to confirm</label>
+                    <br>
+                    <input type="password" name="admin_password" required autofocus>
+                </p>
+
+                <button type="submit" onclick="return confirm('Permanently delete this user?');">
+                    Delete User
+                </button>
+
+                <a href="users.php?section=users">Cancel</a>
+            </form>
+
+        <?php elseif ($action === 'reset_password'): ?>
+
+            <h2>Reset Password</h2>
+
+            <p>
+                Resetting password for
+                <strong><?= htmlspecialchars($user['user_email']) ?></strong>
+            </p>
+
+            <form method="POST">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(generateCsrfToken()) ?>">
+
+                <p>
+                    <label>New Password</label>
+                    <br>
+                    <input type="password" name="new_password" minlength="8" required>
+                </p>
+
+                <p>
+                    <label>Confirm New Password</label>
+                    <br>
+                    <input type="password" name="confirm_password" minlength="8" required>
+                </p>
+
+                <button type="submit">Reset Password</button>
+
+                <a href="users.php?section=users">Cancel</a>
+            </form>
 
         <?php else: ?>
 
@@ -475,6 +834,8 @@ if ($section === 'users' && $action === 'delete') {
                             <td>
                                 <a href="users.php?section=users&action=update&id=<?= $user['user_id'] ?>">Edit</a>
                                 |
+                                <a href="users.php?section=users&action=reset_password&id=<?= $user['user_id'] ?>">Reset Password</a>
+                                |
                                 <?php if ($user['user_verified']): ?>
                                     <a
                                         href="users.php?section=users&action=unverify&id=<?= $user['user_id'] ?>"
@@ -491,12 +852,90 @@ if ($section === 'users' && $action === 'delete') {
                                     </a>
                                 <?php endif; ?>
                                 |
-                                <a
-                                    href="users.php?section=users&action=delete&id=<?= $user['user_id'] ?>"
-                                    onclick="return confirm('Delete this user?');"
-                                >
+                                <a href="users.php?section=users&action=delete&id=<?= $user['user_id'] ?>">
                                     Delete
                                 </a>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+
+        <?php endif; ?>
+
+    <?php endif; ?>
+
+    <!--RESET REQUESTS SECTION-->
+    <?php if ($section === 'reset_requests'): ?>
+
+        <h1>Password Reset Requests</h1>
+
+        <?php if (empty($resetRequests)): ?>
+
+            <p>No password reset requests.</p>
+
+        <?php else: ?>
+
+            <table border="1" cellpadding="8">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Username</th>
+                        <th>Email</th>
+                        <th>Status</th>
+                        <th>Requested At</th>
+                        <th>Resolved At</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($resetRequests as $request): ?>
+                        <tr>
+                            <td>
+                                <?= htmlspecialchars($request['reset_request_id']) ?>
+                            </td>
+                            <td>
+                                <?= htmlspecialchars($request['user_username'] ?? '-') ?>
+                            </td>
+                            <td>
+                                <?= htmlspecialchars($request['user_email'] ?? '-') ?>
+                            </td>
+                            <td>
+                                <?php if ($request['reset_request_status'] === 'pending'): ?>
+                                    <strong style="color: orange;">Pending</strong>
+                                <?php else: ?>
+                                    <strong style="color: green;">Done</strong>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?= htmlspecialchars($request['reset_request_created_at']) ?>
+                            </td>
+                            <td>
+                                <?= $request['reset_request_resolved_at']
+                                    ? htmlspecialchars($request['reset_request_resolved_at'])
+                                    : '—' ?>
+                            </td>
+                            <td>
+                                <?php if ($request['reset_request_status'] === 'pending'): ?>
+
+                                    <a href="users.php?section=users&action=reset_password&id=<?= (int) $request['user_id'] ?>">
+                                        Reset Password
+                                    </a>
+
+                                    |
+
+                                    <a
+                                        href="users.php?section=reset_requests&action=dismiss&id=<?= (int) $request['reset_request_id'] ?>"
+                                        onclick="return confirm('Dismiss this reset request without changing the password?');"
+                                    >
+                                        Dismiss
+                                    </a>
+
+                                <?php else: ?>
+
+                                    <em>—</em>
+
+                                <?php endif; ?>
                             </td>
                         </tr>
                     <?php endforeach; ?>
