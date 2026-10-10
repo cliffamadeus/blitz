@@ -313,27 +313,154 @@ if ($section === 'users' && $action === 'delete') {
         exit;
     }
 
+    // Retrieve the target user to show in confirmation
     $stmt = $pdo->prepare("
-        DELETE FROM users
+        SELECT user_id, user_email, user_username, user_role
+        FROM users
         WHERE user_id = ?
     ");
 
     $stmt->execute([$userId]);
 
-    if (isset($_SESSION['user_id'])) {
-        logActivity(
-            $pdo,
-            $_SESSION['user_id'],
-            $_SESSION['user_email'] ?? null,
-            'delete-user',
-            'success'
-        );
+    $userToDelete = $stmt->fetch();
+
+    if (!$userToDelete) {
+
+        $_SESSION['alert'] = 'User not found.';
+
+        header("Location: users.php?section=users");
+        exit;
     }
 
-    $_SESSION['alert'] = 'User deleted successfully.';
+    // ------------------------------------------------------------
+    // CONSTRAINT: Cannot delete the last user of a given role
+    // ------------------------------------------------------------
+    $roleCounts = [
+        'admin'   => 0,
+        'manager' => 0,
+        'user'    => 0,
+    ];
 
-    header("Location: users.php?section=users");
-    exit;
+    $stmt = $pdo->query("
+        SELECT user_role, COUNT(*) AS total
+        FROM users
+        GROUP BY user_role
+    ");
+
+    foreach ($stmt->fetchAll() as $row) {
+        if (isset($roleCounts[$row['user_role']])) {
+            $roleCounts[$row['user_role']] = (int) $row['total'];
+        }
+    }
+
+    $targetRole = $userToDelete['user_role'];
+
+    if (isset($roleCounts[$targetRole]) && $roleCounts[$targetRole] <= 1) {
+
+        $_SESSION['alert'] =
+            'Cannot delete this user: they are the only remaining "' .
+            $targetRole .
+            '" in the system.';
+
+        header("Location: users.php?section=users");
+        exit;
+    }
+
+    // Handle password confirmation submission
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
+        $adminPassword = $_POST['admin_password'] ?? '';
+
+        if ($adminPassword === '') {
+
+            $_SESSION['alert'] = 'Please enter your password to confirm deletion.';
+
+        } else {
+
+            // Fetch the currently logged-in admin's details
+            $stmt = $pdo->prepare("
+                SELECT user_id, user_email, user_password, user_role
+                FROM users
+                WHERE user_id = ?
+                LIMIT 1
+            ");
+
+            $stmt->execute([$_SESSION['user_id'] ?? 0]);
+
+            $admin = $stmt->fetch();
+
+            // Verify the admin exists and has admin role
+            if (!$admin || $admin['user_role'] !== 'admin') {
+
+                $_SESSION['alert'] = 'Only administrators can delete users.';
+
+                header("Location: users.php?section=users");
+                exit;
+            }
+
+            // Verify the supplied password against the stored hash
+            if (!password_verify($adminPassword, $admin['user_password'])) {
+
+                // Log failed attempt
+                logActivity(
+                    $pdo,
+                    $_SESSION['user_id'],
+                    $_SESSION['user_email'] ?? null,
+                    'delete-user-failed-password',
+                    'failure'
+                );
+
+                $_SESSION['alert'] = 'Incorrect password. User was not deleted.';
+
+            } else {
+
+                // Re-check the constraint here too, in case the DB changed
+                // between page load and form submission.
+                $stmt = $pdo->prepare("
+                    SELECT COUNT(*) AS total
+                    FROM users
+                    WHERE user_role = ?
+                ");
+
+                $stmt->execute([$targetRole]);
+
+                $freshCount = (int) $stmt->fetchColumn();
+
+                if ($freshCount <= 1) {
+
+                    $_SESSION['alert'] =
+                        'Cannot delete this user: they are the only remaining "' .
+                        $targetRole .
+                        '" in the system.';
+
+                    header("Location: users.php?section=users");
+                    exit;
+                }
+
+                // Constraint passed — proceed with deletion
+                $stmt = $pdo->prepare("
+                    DELETE FROM users
+                    WHERE user_id = ?
+                ");
+
+                $stmt->execute([$userId]);
+
+                // Audit trail
+                logActivity(
+                    $pdo,
+                    $_SESSION['user_id'],
+                    $_SESSION['user_email'] ?? null,
+                    'delete-user',
+                    'success'
+                );
+
+                $_SESSION['alert'] = 'User deleted successfully.';
+
+                header("Location: users.php?section=users");
+                exit;
+            }
+        }
+    }
 }
 
 
@@ -589,6 +716,52 @@ if ($section === 'reset_requests' && $action === 'dismiss') {
 
                 <a href="users.php?section=users">Cancel</a>
             </form>
+        <?php elseif ($action === 'delete'): ?>
+
+            <h2>Confirm User Deletion</h2>
+
+            <p>
+                You are about to permanently delete the following user:
+            </p>
+
+            <table border="1" cellpadding="8">
+                <tr>
+                    <th>ID</th>
+                    <td><?= htmlspecialchars($userToDelete['user_id']) ?></td>
+                </tr>
+                <tr>
+                    <th>Email</th>
+                    <td><?= htmlspecialchars($userToDelete['user_email']) ?></td>
+                </tr>
+                <tr>
+                    <th>Username</th>
+                    <td><?= htmlspecialchars($userToDelete['user_username']) ?></td>
+                </tr>
+                <tr>
+                    <th>Role</th>
+                    <td><?= htmlspecialchars($userToDelete['user_role']) ?></td>
+                </tr>
+            </table>
+
+            <p style="color: red;">
+                <strong>Warning:</strong> This action cannot be undone.
+            </p>
+
+            <form method="POST">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(generateCsrfToken()) ?>">
+
+                <p>
+                    <label>Enter your admin password to confirm</label>
+                    <br>
+                    <input type="password" name="admin_password" required autofocus>
+                </p>
+
+                <button type="submit" onclick="return confirm('Permanently delete this user?');">
+                    Delete User
+                </button>
+
+                <a href="users.php?section=users">Cancel</a>
+            </form>
 
         <?php elseif ($action === 'reset_password'): ?>
 
@@ -679,10 +852,7 @@ if ($section === 'reset_requests' && $action === 'dismiss') {
                                     </a>
                                 <?php endif; ?>
                                 |
-                                <a
-                                    href="users.php?section=users&action=delete&id=<?= $user['user_id'] ?>"
-                                    onclick="return confirm('Delete this user?');"
-                                >
+                                <a href="users.php?section=users&action=delete&id=<?= $user['user_id'] ?>">
                                     Delete
                                 </a>
                             </td>
